@@ -1,4 +1,4 @@
-# JSON Schema → DuckDB (Java 21)
+# JSON Schema to DuckDB
 
 Generates a DuckDB `CREATE TABLE` statement from a JSON Schema.
 
