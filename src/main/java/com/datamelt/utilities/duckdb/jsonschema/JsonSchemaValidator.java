@@ -50,8 +50,8 @@ public class JsonSchemaValidator {
 
         // Collect required field names
         List<String> requiredFields = new ArrayList<>();
-        JsonNode requiredNode = rootSchema.get("required");
-        if (requiredNode != null && requiredNode.isArray()) {
+        JsonNode requiredNode = rootSchema.get("required"); // && requiredNode.isArray()
+        if (requiredNode != null ) {
             requiredNode.forEach(n -> requiredFields.add(n.asText()));
         }
 

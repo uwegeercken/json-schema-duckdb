@@ -3,12 +3,16 @@ package com.datamelt.utilities.duckdb.jsonschema;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeCreator;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -53,8 +57,8 @@ public class Main {
         Path schemaPath = Path.of(schemaArg).toAbsolutePath().normalize();
         validateFile(schemaPath, "schema");
 
-        ObjectMapper mapper     = new ObjectMapper();
-        JsonNode     rootSchema = parseJsonFile(mapper, schemaPath, "schema");
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode rootSchema = parseJsonFile(mapper, schemaPath, "schema");
         validateSchemaContent(rootSchema, schemaPath);
 
         // ── Always print DDL ──────────────────────────────────────────────────
@@ -82,15 +86,15 @@ public class Main {
             totalFiles++;
             System.out.println("File: " + dataFile.getFileName());
 
-            JsonNode records = parseJsonFile(mapper, dataFile, "data");
-            if (!records.isArray()) {
-                System.err.println("  ERROR: Not a JSON array — skipping.");
+            Optional<JsonNode> records = getAsArray(mapper, dataFile);
+            if (records.isEmpty()) {
+                System.err.println("  ERROR: Not a JSON array or object — skipping.");
                 failedFiles++;
                 continue;
-            }
+             }
 
             JsonSchemaValidator.ValidationResult result =
-                    JsonSchemaValidator.validate(records, rootSchema);
+                    JsonSchemaValidator.validate(records.get(), rootSchema);
             result.print();
 
             if (!result.isValid()) failedFiles++;
@@ -103,6 +107,24 @@ public class Main {
         System.out.printf("Files invalid : %d%n", failedFiles);
 
         if (failedFiles > 0) System.exit(1);
+    }
+
+    private static Optional<JsonNode> getAsArray(ObjectMapper mapper, Path dataFile)
+    {
+        JsonNode records = parseJsonFile(mapper, dataFile, "data");
+        if (!records.isArray() && records.isObject()) {
+            ArrayNode arr = mapper.createArrayNode();
+            arr.add(records);
+            return Optional.of(arr);
+        }
+        else if(records.isArray())
+        {
+            return Optional.of(records);
+        }
+        else
+        {
+            return Optional.empty();
+        }
     }
 
     // ── File resolution ───────────────────────────────────────────────────────
