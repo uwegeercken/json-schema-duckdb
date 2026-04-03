@@ -210,7 +210,7 @@ public class Main {
     private static void printHelp() {
         System.out.println("""
                 json-schema-duckdb  v%s
-                Derive a DuckDB CREATE TABLE statement from a JSON Schema.
+                Derive a DuckDB CREATE TABLE statement from a JSON Schema and optionally validate data files
 
                 USAGE
                   java -jar json-schema-duckdb.jar --schema <file> [OPTIONS]
