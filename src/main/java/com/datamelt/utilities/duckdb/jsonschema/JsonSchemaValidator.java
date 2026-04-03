@@ -1,6 +1,8 @@
 package com.datamelt.utilities.duckdb.jsonschema;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +19,8 @@ import java.util.List;
  * pattern, minimum/maximum, or enum values.
  */
 public class JsonSchemaValidator {
+
+    private static final Logger LOG = LoggerFactory.getLogger(JsonSchemaValidator.class);
 
     public record ValidationResult(int totalRecords, List<Violation> violations) {
         public boolean isValid() { return violations.isEmpty(); }
@@ -45,49 +49,54 @@ public class JsonSchemaValidator {
      * @return a ValidationResult containing all violations found
      */
     public static ValidationResult validate(JsonNode records, JsonNode rootSchema) {
-        List<Violation> violations = new ArrayList<>();
-        JsonNode properties = rootSchema.get("properties");
+        List<Violation> violations  = new ArrayList<>();
+        JsonNode        properties  = rootSchema.get("properties");
 
-        // Collect required field names
         List<String> requiredFields = new ArrayList<>();
-        JsonNode requiredNode = rootSchema.get("required"); // && requiredNode.isArray()
-        if (requiredNode != null ) {
+        JsonNode requiredNode = rootSchema.get("required");
+        if (requiredNode != null && requiredNode.isArray()) {
             requiredNode.forEach(n -> requiredFields.add(n.asText()));
         }
+
+        LOG.debug("Validating {} record(s), {} required field(s)", records.size(), requiredFields.size());
 
         int index = 0;
         for (JsonNode record : records) {
             if (!record.isObject()) {
-                violations.add(new Violation(index, "(record)", "Expected a JSON object but got: "
-                        + record.getNodeType()));
+                LOG.warn("Record #{} is not a JSON object ({})", index + 1, record.getNodeType());
+                violations.add(new Violation(index, "(record)",
+                        "Expected a JSON object but got: " + record.getNodeType()));
                 index++;
                 continue;
             }
 
-            // ── Check required fields are present and non-null ────────────────
+            // ── Required fields present and non-null ──────────────────────────
             for (String required : requiredFields) {
                 JsonNode val = record.get(required);
                 if (val == null || val.isNull()) {
+                    LOG.debug("Record #{}: required field '{}' is missing or null", index + 1, required);
                     violations.add(new Violation(index, required,
                             "required field is missing or null"));
                 }
             }
 
-            // ── Check type of all present fields ──────────────────────────────
+            // ── Type-check all present fields ─────────────────────────────────
             if (properties != null) {
-                final int recordIndex = index; // effectively final capture for lambda
+                final int recordIndex = index; // effectively final for lambda
                 record.fieldNames().forEachRemaining(fieldName -> {
                     JsonNode fieldSchema = properties.get(fieldName);
                     if (fieldSchema == null) {
+                        LOG.debug("Record #{}: unknown field '{}'", recordIndex + 1, fieldName);
                         violations.add(new Violation(recordIndex, fieldName,
                                 "unknown field (not declared in schema properties)"));
                         return;
                     }
                     JsonNode val = record.get(fieldName);
-                    if (val == null || val.isNull()) return; // null is allowed for optional fields
+                    if (val == null || val.isNull()) return;
 
                     String typeError = checkType(val, fieldSchema, rootSchema);
                     if (typeError != null) {
+                        LOG.debug("Record #{}: field '{}' type error — {}", recordIndex + 1, fieldName, typeError);
                         violations.add(new Violation(recordIndex, fieldName, typeError));
                     }
                 });
@@ -96,24 +105,21 @@ public class JsonSchemaValidator {
             index++;
         }
 
+        LOG.info("Validation complete: {} record(s), {} violation(s)", index, violations.size());
         return new ValidationResult(index, violations);
     }
 
-    /**
-     * Check whether a value matches its schema's declared type.
-     * Returns an error message string, or null if the value is valid.
-     */
+    // ── Type checking ─────────────────────────────────────────────────────────
+
     private static String checkType(JsonNode val, JsonNode schema, JsonNode rootSchema) {
         if (schema == null || schema.isNull()) return null;
 
-        // Resolve $ref
         if (schema.has("$ref")) {
             JsonNode resolved = resolveRef(schema.get("$ref").asText(), rootSchema);
-            if (resolved == null) return null; // unresolvable ref — skip type check
+            if (resolved == null) return null;
             return checkType(val, resolved, rootSchema);
         }
 
-        // anyOf / oneOf — valid if it matches any non-null variant
         if (schema.has("anyOf") || schema.has("oneOf")) {
             JsonNode variants = schema.has("anyOf") ? schema.get("anyOf") : schema.get("oneOf");
             for (JsonNode variant : variants) {
@@ -124,7 +130,6 @@ public class JsonSchemaValidator {
             return "value does not match any declared variant in anyOf/oneOf";
         }
 
-        // allOf — must match all sub-schemas
         if (schema.has("allOf")) {
             for (JsonNode sub : schema.get("allOf")) {
                 JsonNode resolved = sub.has("$ref")
@@ -140,24 +145,25 @@ public class JsonSchemaValidator {
         String expectedType = schema.get("type").asText();
 
         return switch (expectedType) {
-            case "string"  -> val.isTextual()  ? null : typeMismatch("string",  val);
+            case "string"  -> val.isTextual()        ? null : typeMismatch("string",  val);
             case "integer" -> val.isIntegralNumber() ? null : typeMismatch("integer", val);
-            case "number"  -> val.isNumber()   ? null : typeMismatch("number",  val);
-            case "boolean" -> val.isBoolean()  ? null : typeMismatch("boolean", val);
-            case "array"   -> val.isArray()    ? null : typeMismatch("array",   val);
-            case "object"  -> val.isObject()   ? null : typeMismatch("object",  val);
-            default        -> null; // unknown type — skip
+            case "number"  -> val.isNumber()         ? null : typeMismatch("number",  val);
+            case "boolean" -> val.isBoolean()        ? null : typeMismatch("boolean", val);
+            case "array"   -> val.isArray()          ? null : typeMismatch("array",   val);
+            case "object"  -> val.isObject()         ? null : typeMismatch("object",  val);
+            default        -> null;
         };
     }
 
     private static String typeMismatch(String expected, JsonNode actual) {
-        return "expected type '%s' but got '%s'".formatted(expected, actual.getNodeType().name().toLowerCase());
+        return "expected type '%s' but got '%s'".formatted(
+                expected, actual.getNodeType().name().toLowerCase());
     }
 
     private static JsonNode resolveRef(String ref, JsonNode rootSchema) {
         if (!ref.startsWith("#/")) return null;
         String[] parts = ref.substring(2).split("/");
-        JsonNode node = rootSchema;
+        JsonNode node  = rootSchema;
         for (String part : parts) {
             part = part.replace("~1", "/").replace("~0", "~");
             node = node.get(part);

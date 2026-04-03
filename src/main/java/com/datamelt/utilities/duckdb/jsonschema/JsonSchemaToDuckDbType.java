@@ -1,6 +1,8 @@
 package com.datamelt.utilities.duckdb.jsonschema;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,10 +19,10 @@ import java.util.List;
  *   - $ref resolution                   -> resolved from root $defs / definitions
  *   - anyOf / oneOf                     -> common-type merge or VARCHAR fallback
  *   - allOf                             -> merged STRUCT of all sub-schemas
- *
- * A root schema node must be supplied so $ref can be resolved.
  */
 public class JsonSchemaToDuckDbType {
+
+    private static final Logger LOG = LoggerFactory.getLogger(JsonSchemaToDuckDbType.class);
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -29,23 +31,22 @@ public class JsonSchemaToDuckDbType {
      *
      * @param schema     the schema node to convert
      * @param rootSchema the top-level schema document (needed for $ref resolution)
+     * @return DuckDB type string, e.g. "VARCHAR", "BIGINT", "STRUCT(x VARCHAR, y BIGINT)"
      */
     public static String toDuckDbType(JsonNode schema, JsonNode rootSchema) {
         if (schema == null || schema.isNull()) {
+            LOG.warn("Null schema node encountered — falling back to VARCHAR");
             return "VARCHAR";
         }
 
-        // ── $ref ──────────────────────────────────────────────────────────────
         if (schema.has("$ref")) {
             return resolveRef(schema.get("$ref").asText(), rootSchema);
         }
 
-        // ── allOf → merge all sub-schemas into one STRUCT ─────────────────────
         if (schema.has("allOf")) {
             return mergeAllOf(schema.get("allOf"), rootSchema);
         }
 
-        // ── anyOf / oneOf → find common primitive, else VARCHAR ───────────────
         if (schema.has("anyOf")) {
             return mergeAnyOf(schema.get("anyOf"), "anyOf", rootSchema);
         }
@@ -64,11 +65,10 @@ public class JsonSchemaToDuckDbType {
             case "object"  -> mapObjectType(schema, rootSchema);
             case "array"   -> mapArrayType(schema, rootSchema);
             default -> {
-                // No explicit type but has properties → treat as object
                 if (schema.has("properties") || schema.has("additionalProperties")) {
                     yield mapObjectType(schema, rootSchema);
                 }
-                warn("Unknown/missing type '%s' – falling back to VARCHAR".formatted(type));
+                LOG.warn("Unknown/missing type '{}' — falling back to VARCHAR", type);
                 yield "VARCHAR";
             }
         };
@@ -79,21 +79,21 @@ public class JsonSchemaToDuckDbType {
     private static String resolveRef(String ref, JsonNode rootSchema) {
         JsonNode node = resolveRefNode(ref, rootSchema);
         if (node == null) {
-            warn("$ref '%s' could not be resolved – falling back to VARCHAR".formatted(ref));
+            LOG.warn("$ref '{}' could not be resolved — falling back to VARCHAR", ref);
             return "VARCHAR";
         }
+        LOG.debug("Resolved $ref '{}'", ref);
         return toDuckDbType(node, rootSchema);
     }
 
     private static JsonNode resolveRefNode(String ref, JsonNode rootSchema) {
         if (!ref.startsWith("#/")) {
-            warn("External $ref '%s' is not supported – falling back to VARCHAR".formatted(ref));
+            LOG.warn("External $ref '{}' is not supported — falling back to VARCHAR", ref);
             return null;
         }
         String[] parts = ref.substring(2).split("/");
-        JsonNode node = rootSchema;
+        JsonNode node  = rootSchema;
         for (String part : parts) {
-            // Unescape JSON Pointer tokens (~1 → /, ~0 → ~)
             part = part.replace("~1", "/").replace("~0", "~");
             node = node.get(part);
             if (node == null) return null;
@@ -105,14 +105,11 @@ public class JsonSchemaToDuckDbType {
 
     private static String mergeAllOf(JsonNode allOf, JsonNode rootSchema) {
         List<String> fields = new ArrayList<>();
-
         for (JsonNode subSchema : allOf) {
             JsonNode resolved = subSchema.has("$ref")
                     ? resolveRefNode(subSchema.get("$ref").asText(), rootSchema)
                     : subSchema;
-
             if (resolved == null) continue;
-
             JsonNode props = resolved.get("properties");
             if (props != null) {
                 props.fieldNames().forEachRemaining(name ->
@@ -120,9 +117,8 @@ public class JsonSchemaToDuckDbType {
                 );
             }
         }
-
         if (fields.isEmpty()) {
-            warn("allOf produced no fields – falling back to VARCHAR");
+            LOG.warn("allOf produced no fields — falling back to VARCHAR");
             return "VARCHAR";
         }
         return "STRUCT(" + String.join(", ", fields) + ")";
@@ -131,7 +127,6 @@ public class JsonSchemaToDuckDbType {
     // ── anyOf / oneOf → common type or VARCHAR ────────────────────────────────
 
     private static String mergeAnyOf(JsonNode variants, String keyword, JsonNode rootSchema) {
-        // Filter out {type: "null"} entries (nullable pattern)
         List<JsonNode> nonNull = new ArrayList<>();
         for (JsonNode v : variants) {
             String t = v.has("type") ? v.get("type").asText() : "";
@@ -139,11 +134,9 @@ public class JsonSchemaToDuckDbType {
         }
 
         if (nonNull.size() == 1) {
-            // Simple nullable: anyOf: [{type: X}, {type: null}] → use X
             return toDuckDbType(nonNull.get(0), rootSchema);
         }
 
-        // Check if all variants resolve to the same type
         List<String> resolved = nonNull.stream()
                 .map(v -> toDuckDbType(v, rootSchema))
                 .distinct()
@@ -153,8 +146,7 @@ public class JsonSchemaToDuckDbType {
             return resolved.get(0);
         }
 
-        warn("'%s' has %d distinct types %s – falling back to VARCHAR"
-                .formatted(keyword, resolved.size(), resolved));
+        LOG.warn("'{}' has {} distinct types {} — falling back to VARCHAR", keyword, resolved.size(), resolved);
         return "VARCHAR";
     }
 
@@ -165,13 +157,12 @@ public class JsonSchemaToDuckDbType {
         JsonNode additionalProperties = schema.get("additionalProperties");
 
         boolean hasProps      = properties != null && !properties.isEmpty();
-        // additionalProperties: true/false are wildcards, only a schema object is typed
         boolean hasAdditional = additionalProperties != null
                 && !additionalProperties.isNull()
                 && !additionalProperties.isBoolean();
 
         if (hasProps && hasAdditional) {
-            warn("Object has both 'properties' and 'additionalProperties' – mapping as STRUCT");
+            LOG.warn("Object has both 'properties' and 'additionalProperties' — mapping as STRUCT");
         }
 
         if (hasProps) {
@@ -179,12 +170,11 @@ public class JsonSchemaToDuckDbType {
         }
 
         if (hasAdditional) {
-            // MAP(VARCHAR, valueType) — JSON object keys are always strings
             String valueType = toDuckDbType(additionalProperties, rootSchema);
             return "MAP(VARCHAR, %s)".formatted(valueType);
         }
 
-        warn("Object has no typed properties – falling back to VARCHAR (store as JSON text)");
+        LOG.warn("Object has no typed properties — falling back to VARCHAR (store as JSON text)");
         return "VARCHAR";
     }
 
@@ -201,10 +191,9 @@ public class JsonSchemaToDuckDbType {
     private static String mapArrayType(JsonNode schema, JsonNode rootSchema) {
         JsonNode items = schema.get("items");
         if (items == null || items.isNull()) {
-            warn("Array has no 'items' definition – falling back to VARCHAR[]");
+            LOG.warn("Array has no 'items' definition — falling back to VARCHAR[]");
             return "VARCHAR[]";
         }
-        // Recursive: naturally handles array-of-arrays
         return toDuckDbType(items, rootSchema) + "[]";
     }
 
@@ -218,11 +207,5 @@ public class JsonSchemaToDuckDbType {
             case "uuid"      -> "UUID";
             default          -> "VARCHAR";
         };
-    }
-
-    // ── warning helper ────────────────────────────────────────────────────────
-
-    private static void warn(String message) {
-        System.err.println("[WARN] JsonSchemaToDuckDbType: " + message);
     }
 }
