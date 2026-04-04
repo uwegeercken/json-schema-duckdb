@@ -8,11 +8,29 @@ Generates a DuckDB `CREATE TABLE` statement from a JSON Schema and optionally va
 - Maven 3.8+
 
 ## Usage from Code
-    // From a path
-    String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
+You may also use the tool programmatically by adding it as a dependency to your project.
 
-    // From a stream (e.g. from classpath resource)
-    String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
+Add the following dependency to your Maven pom.xml:
+
+```xml
+<dependency>
+    <groupId>io.github.uwegeercken</groupId>
+    <artifactId>json-schema-duckdb</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+The artifact is available on Maven Central: https://central.sonatype.com/artifact/io.github.uwegeercken/json-schema-duckdb
+
+Example usage:
+
+```java
+// From a path
+String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
+
+// From a stream (e.g. from classpath resource)
+String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
+```
 
 ## Usage from Main Program
 
@@ -49,8 +67,6 @@ Generates a DuckDB `CREATE TABLE` statement from a JSON Schema and optionally va
 
       # Print DDL and validate all files in a folder
       java -jar json-schema-duckdb.jar --schema order.json --validate-dir ./data/
-
-
 
 ## Type Mapping
 
