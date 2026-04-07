@@ -19,6 +19,12 @@ import java.util.Set;
  *
  * Intended for use both as a command-line tool (via Main) and as a library.
  *
+ * Field names are always double-quoted in the generated DDL to handle names that
+ * are DuckDB reserved words or contain special characters (e.g. @type, $ref).
+ *
+ * JSON Schema metadata keywords ($schema, $vocabulary, etc.) are excluded from
+ * the generated DDL even if they appear under "properties".
+ *
  * Programmatic API:
  * <pre>
  *   // From a file path
@@ -36,6 +42,14 @@ public class JsonSchemaDdlGenerator {
 
     private static final Logger       LOG    = LoggerFactory.getLogger(JsonSchemaDdlGenerator.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * JSON Schema metadata keywords that must never become DDL columns,
+     * even if they appear under "properties" in the schema.
+     */
+    static final Set<String> METADATA_FIELDS = Set.of(
+            "$schema", "$vocabulary", "$id", "$comment", "$anchor", "$dynamicAnchor"
+    );
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -99,12 +113,23 @@ public class JsonSchemaDdlGenerator {
 
         List<String> columnDefs = new ArrayList<>();
         properties.fieldNames().forEachRemaining(fieldName -> {
-            JsonNode fieldSchema  = properties.get(fieldName);
-            String   duckDbType   = JsonSchemaToDuckDbType.toDuckDbType(fieldSchema, rootSchema);
-            String   nullability  = requiredFields.contains(fieldName) ? " NOT NULL" : "";
-            LOG.debug("  Column '{}' -> {} {}", fieldName, duckDbType,
+
+            // Skip JSON Schema metadata keywords — they are not data columns
+            if (METADATA_FIELDS.contains(fieldName)) {
+                LOG.debug("Skipping metadata field '{}'", fieldName);
+                return;
+            }
+
+            JsonNode fieldSchema = properties.get(fieldName);
+            String   duckDbType  = JsonSchemaToDuckDbType.toDuckDbType(fieldSchema, rootSchema);
+            String   nullability = requiredFields.contains(fieldName) ? " NOT NULL" : "";
+
+            // Always quote field names: handles reserved words, @type, $ref, spaces, etc.
+            String quotedName = "\"" + fieldName + "\"";
+
+            LOG.debug("  Column {} -> {} {}", quotedName, duckDbType,
                     nullability.isBlank() ? "(nullable)" : "(NOT NULL)");
-            columnDefs.add("    %s %s%s".formatted(fieldName, duckDbType, nullability));
+            columnDefs.add("    %s %s%s".formatted(quotedName, duckDbType, nullability));
         });
 
         String ddl = """

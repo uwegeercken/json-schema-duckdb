@@ -112,9 +112,10 @@ public class JsonSchemaToDuckDbType {
             if (resolved == null) continue;
             JsonNode props = resolved.get("properties");
             if (props != null) {
-                props.fieldNames().forEachRemaining(name ->
-                        fields.add(name + " " + toDuckDbType(props.get(name), rootSchema))
-                );
+                props.fieldNames().forEachRemaining(name -> {
+                    String quotedName = "\"" + name + "\"";
+                    fields.add(quotedName + " " + toDuckDbType(props.get(name), rootSchema));
+                });
             }
         }
         if (fields.isEmpty()) {
@@ -180,9 +181,12 @@ public class JsonSchemaToDuckDbType {
 
     private static String buildStruct(JsonNode properties, JsonNode rootSchema) {
         List<String> fields = new ArrayList<>();
-        properties.fieldNames().forEachRemaining(name ->
-                fields.add(name + " " + toDuckDbType(properties.get(name), rootSchema))
-        );
+        properties.fieldNames().forEachRemaining(name -> {
+            // Quote field names for the same reasons as top-level columns:
+            // reserved words, special characters (@type, $ref, spaces, etc.)
+            String quotedName = "\"" + name + "\"";
+            fields.add(quotedName + " " + toDuckDbType(properties.get(name), rootSchema));
+        });
         return "STRUCT(" + String.join(", ", fields) + ")";
     }
 
