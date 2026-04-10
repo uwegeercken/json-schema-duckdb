@@ -1,8 +1,6 @@
 package com.datamelt.utilities.duckdb;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,14 +16,14 @@ import java.util.List;
  *   - Objects with additionalProperties -> MAP(VARCHAR, valueType)
  *   - Arrays                            -> elementType[]
  *   - Nested arrays                     -> elementType[][] (recursive)
- *   - Tuple-style arrays                -> VARCHAR[] (fallback with warning)
+ *   - Tuple-style arrays                -> VARCHAR[] (fallback, WARNING)
  *   - $ref resolution                   -> resolved from root $defs / definitions
- *   - anyOf / oneOf                     -> common-type merge or VARCHAR fallback
+ *   - anyOf / oneOf                     -> common-type merge or VARCHAR fallback (WARNING)
  *   - allOf                             -> primitive passthrough or merged STRUCT
+ *
+ * All fallbacks are recorded in the provided warnings list rather than logged.
  */
 public class JsonSchemaToDuckDbType {
-
-    private static final Logger LOG = LoggerFactory.getLogger(JsonSchemaToDuckDbType.class);
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -34,27 +32,32 @@ public class JsonSchemaToDuckDbType {
      *
      * @param schema     the schema node to convert
      * @param rootSchema the top-level schema document (needed for $ref resolution)
+     * @param fieldPath  dotted path to this field, used in warning messages
+     * @param warnings   list to accumulate any warnings or errors encountered
      * @return DuckDB type string, e.g. "VARCHAR", "BIGINT", "STRUCT(x VARCHAR, y BIGINT)"
      */
-    public static String toDuckDbType(JsonNode schema, JsonNode rootSchema) {
+    public static String toDuckDbType(JsonNode schema, JsonNode rootSchema,
+                                      String fieldPath, List<DdlWarning> warnings) {
         if (schema == null || schema.isNull()) {
-            LOG.warn("Null schema node encountered — falling back to VARCHAR");
+            warnings.add(new DdlWarning(fieldPath,
+                    "null schema node — falling back to VARCHAR",
+                    DdlWarning.Severity.ERROR));
             return "VARCHAR";
         }
 
         if (schema.has("$ref")) {
-            return resolveRef(schema.get("$ref").asText(), rootSchema);
+            return resolveRef(schema.get("$ref").asText(), rootSchema, fieldPath, warnings);
         }
 
         if (schema.has("allOf")) {
-            return mergeAllOf(schema.get("allOf"), rootSchema);
+            return mergeAllOf(schema.get("allOf"), rootSchema, fieldPath, warnings);
         }
 
         if (schema.has("anyOf")) {
-            return mergeAnyOf(schema.get("anyOf"), "anyOf", rootSchema);
+            return mergeAnyOf(schema.get("anyOf"), "anyOf", rootSchema, fieldPath, warnings);
         }
         if (schema.has("oneOf")) {
-            return mergeAnyOf(schema.get("oneOf"), "oneOf", rootSchema);
+            return mergeAnyOf(schema.get("oneOf"), "oneOf", rootSchema, fieldPath, warnings);
         }
 
         String type   = schema.has("type")   ? schema.get("type").asText()   : "";
@@ -65,13 +68,15 @@ public class JsonSchemaToDuckDbType {
             case "integer" -> mapIntegerType(format);
             case "number"  -> mapNumberType(format);
             case "boolean" -> "BOOLEAN";
-            case "object"  -> mapObjectType(schema, rootSchema);
-            case "array"   -> mapArrayType(schema, rootSchema);
+            case "object"  -> mapObjectType(schema, rootSchema, fieldPath, warnings);
+            case "array"   -> mapArrayType(schema, rootSchema, fieldPath, warnings);
             default -> {
                 if (schema.has("properties") || schema.has("additionalProperties")) {
-                    yield mapObjectType(schema, rootSchema);
+                    yield mapObjectType(schema, rootSchema, fieldPath, warnings);
                 }
-                LOG.warn("Unknown/missing type '{}' — falling back to VARCHAR", type);
+                warnings.add(new DdlWarning(fieldPath,
+                        "unknown or missing type '%s' — falling back to VARCHAR".formatted(type),
+                        DdlWarning.Severity.ERROR));
                 yield "VARCHAR";
             }
         };
@@ -79,21 +84,20 @@ public class JsonSchemaToDuckDbType {
 
     // ── $ref resolution ───────────────────────────────────────────────────────
 
-    private static String resolveRef(String ref, JsonNode rootSchema) {
+    private static String resolveRef(String ref, JsonNode rootSchema,
+                                     String fieldPath, List<DdlWarning> warnings) {
         JsonNode node = resolveRefNode(ref, rootSchema);
         if (node == null) {
-            LOG.warn("$ref '{}' could not be resolved — falling back to VARCHAR", ref);
+            warnings.add(new DdlWarning(fieldPath,
+                    "$ref '%s' could not be resolved — falling back to VARCHAR".formatted(ref),
+                    DdlWarning.Severity.ERROR));
             return "VARCHAR";
         }
-        LOG.debug("Resolved $ref '{}'", ref);
-        return toDuckDbType(node, rootSchema);
+        return toDuckDbType(node, rootSchema, fieldPath, warnings);
     }
 
     private static JsonNode resolveRefNode(String ref, JsonNode rootSchema) {
-        if (!ref.startsWith("#/")) {
-            LOG.warn("External $ref '{}' is not supported — falling back to VARCHAR", ref);
-            return null;
-        }
+        if (!ref.startsWith("#/")) return null;
         String[] parts = ref.substring(2).split("/");
         JsonNode node  = rootSchema;
         for (String part : parts) {
@@ -106,7 +110,8 @@ public class JsonSchemaToDuckDbType {
 
     // ── allOf → primitive passthrough or merged STRUCT ────────────────────────
 
-    private static String mergeAllOf(JsonNode allOf, JsonNode rootSchema) {
+    private static String mergeAllOf(JsonNode allOf, JsonNode rootSchema,
+                                     String fieldPath, List<DdlWarning> warnings) {
         List<String> fields         = new ArrayList<>();
         List<String> primitiveTypes = new ArrayList<>();
         boolean      hasProperties  = false;
@@ -121,14 +126,16 @@ public class JsonSchemaToDuckDbType {
                 hasProperties = true;
                 resolved.get("properties").fieldNames().forEachRemaining(name -> {
                     String quotedName = "\"" + name + "\"";
-                    fields.add(quotedName + " " + toDuckDbType(resolved.get("properties").get(name), rootSchema));
+                    fields.add(quotedName + " " + toDuckDbType(
+                            resolved.get("properties").get(name), rootSchema,
+                            fieldPath + "." + name, warnings));
                 });
             }
 
             if (resolved.has("type")) {
                 String type = resolved.get("type").asText();
                 if (!type.equals("object") && !type.equals("array")) {
-                    primitiveTypes.add(toDuckDbType(resolved, rootSchema));
+                    primitiveTypes.add(toDuckDbType(resolved, rootSchema, fieldPath, warnings));
                 }
             }
         }
@@ -136,7 +143,9 @@ public class JsonSchemaToDuckDbType {
         // If there are properties, build a STRUCT
         if (hasProperties) {
             if (fields.isEmpty()) {
-                LOG.warn("allOf produced no fields — falling back to VARCHAR");
+                warnings.add(new DdlWarning(fieldPath,
+                        "allOf produced no fields — falling back to VARCHAR",
+                        DdlWarning.Severity.ERROR));
                 return "VARCHAR";
             }
             return "STRUCT(" + String.join(", ", fields) + ")";
@@ -148,13 +157,16 @@ public class JsonSchemaToDuckDbType {
             return distinctTypes.get(0);
         }
 
-        LOG.warn("allOf produced no fields and no common primitive type — falling back to VARCHAR");
+        warnings.add(new DdlWarning(fieldPath,
+                "allOf produced no fields and no common primitive type — falling back to VARCHAR",
+                DdlWarning.Severity.ERROR));
         return "VARCHAR";
     }
 
     // ── anyOf / oneOf → common type or VARCHAR ────────────────────────────────
 
-    private static String mergeAnyOf(JsonNode variants, String keyword, JsonNode rootSchema) {
+    private static String mergeAnyOf(JsonNode variants, String keyword, JsonNode rootSchema,
+                                     String fieldPath, List<DdlWarning> warnings) {
         List<JsonNode> nonNull = new ArrayList<>();
         for (JsonNode v : variants) {
             String t = v.has("type") ? v.get("type").asText() : "";
@@ -162,11 +174,11 @@ public class JsonSchemaToDuckDbType {
         }
 
         if (nonNull.size() == 1) {
-            return toDuckDbType(nonNull.get(0), rootSchema);
+            return toDuckDbType(nonNull.get(0), rootSchema, fieldPath, warnings);
         }
 
         List<String> resolved = nonNull.stream()
-                .map(v -> toDuckDbType(v, rootSchema))
+                .map(v -> toDuckDbType(v, rootSchema, fieldPath, warnings))
                 .distinct()
                 .toList();
 
@@ -174,13 +186,17 @@ public class JsonSchemaToDuckDbType {
             return resolved.get(0);
         }
 
-        LOG.warn("'{}' has {} distinct types {} — falling back to VARCHAR", keyword, resolved.size(), resolved);
+        warnings.add(new DdlWarning(fieldPath,
+                "'%s' has %d distinct types %s — falling back to VARCHAR"
+                        .formatted(keyword, resolved.size(), resolved),
+                DdlWarning.Severity.WARNING));
         return "VARCHAR";
     }
 
     // ── object mapping ────────────────────────────────────────────────────────
 
-    private static String mapObjectType(JsonNode schema, JsonNode rootSchema) {
+    private static String mapObjectType(JsonNode schema, JsonNode rootSchema,
+                                        String fieldPath, List<DdlWarning> warnings) {
         JsonNode properties           = schema.get("properties");
         JsonNode additionalProperties = schema.get("additionalProperties");
 
@@ -189,48 +205,53 @@ public class JsonSchemaToDuckDbType {
                 && !additionalProperties.isNull()
                 && !additionalProperties.isBoolean();
 
-        if (hasProps && hasAdditional) {
-            LOG.warn("Object has both 'properties' and 'additionalProperties' — mapping as STRUCT");
-        }
-
         if (hasProps) {
-            return buildStruct(schema, rootSchema);
+            return buildStruct(schema, rootSchema, fieldPath, warnings);
         }
 
         if (hasAdditional) {
-            String valueType = toDuckDbType(additionalProperties, rootSchema);
+            String valueType = toDuckDbType(additionalProperties, rootSchema, fieldPath, warnings);
             return "MAP(VARCHAR, %s)".formatted(valueType);
         }
 
-        LOG.warn("Object has no typed properties — falling back to VARCHAR (store as JSON text)");
+        warnings.add(new DdlWarning(fieldPath,
+                "object has no typed properties — falling back to VARCHAR (store as JSON text)",
+                DdlWarning.Severity.WARNING));
         return "VARCHAR";
     }
 
-    private static String buildStruct(JsonNode objectSchema, JsonNode rootSchema) {
+    private static String buildStruct(JsonNode objectSchema, JsonNode rootSchema,
+                                      String fieldPath, List<DdlWarning> warnings) {
         JsonNode     properties = objectSchema.get("properties");
         List<String> fields     = new ArrayList<>();
 
         properties.fieldNames().forEachRemaining(name -> {
             String quotedName = "\"" + name + "\"";
-            String type       = toDuckDbType(properties.get(name), rootSchema);
-            fields.add(quotedName + " " + type);  // no NOT NULL inside STRUCT
+            String type       = toDuckDbType(properties.get(name), rootSchema,
+                    fieldPath + "." + name, warnings);
+            fields.add(quotedName + " " + type);
         });
         return "STRUCT(" + String.join(", ", fields) + ")";
     }
 
     // ── array mapping ─────────────────────────────────────────────────────────
 
-    private static String mapArrayType(JsonNode schema, JsonNode rootSchema) {
+    private static String mapArrayType(JsonNode schema, JsonNode rootSchema,
+                                       String fieldPath, List<DdlWarning> warnings) {
         JsonNode items = schema.get("items");
         if (items == null || items.isNull()) {
-            LOG.warn("Array has no 'items' definition — falling back to VARCHAR[]");
+            warnings.add(new DdlWarning(fieldPath,
+                    "array has no 'items' definition — falling back to VARCHAR[]",
+                    DdlWarning.Severity.WARNING));
             return "VARCHAR[]";
         }
         if (items.isArray()) {
-            LOG.warn("Tuple-style array 'items' is not supported — falling back to VARCHAR[]");
+            warnings.add(new DdlWarning(fieldPath,
+                    "tuple-style array 'items' is not supported — falling back to VARCHAR[]",
+                    DdlWarning.Severity.WARNING));
             return "VARCHAR[]";
         }
-        return toDuckDbType(items, rootSchema) + "[]";
+        return toDuckDbType(items, rootSchema, fieldPath, warnings) + "[]";
     }
 
     // ── type format mappings ──────────────────────────────────────────────────
@@ -250,14 +271,14 @@ public class JsonSchemaToDuckDbType {
             case "int8"  -> "TINYINT";
             case "int16" -> "SMALLINT";
             case "int32" -> "INTEGER";
-            default      -> "BIGINT";  // int64 and unspecified default to BIGINT
+            default      -> "BIGINT";
         };
     }
 
     private static String mapNumberType(String format) {
         return switch (format) {
-            case "float"   -> "FLOAT";
-            default        -> "DOUBLE";  // decimal and unspecified default to DOUBLE
+            case "float" -> "FLOAT";
+            default      -> "DOUBLE";
         };
     }
 }

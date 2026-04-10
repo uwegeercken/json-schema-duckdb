@@ -1,4 +1,4 @@
-package com.datamelt.utilities.jsonschema;
+package com.datamelt.utilities.schema.validate;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,29 +21,33 @@ public class JsonSchema
     public JsonSchema(Path schemaFilePath) throws IOException, IllegalArgumentException
     {
         ObjectMapper mapper = new ObjectMapper();
-        boolean schemaFilePathOk = Files.exists(schemaFilePath) && Files.isRegularFile(schemaFilePath) && Files.isReadable(schemaFilePath);
+        boolean schemaFilePathOk = Files.exists(schemaFilePath)
+                && Files.isRegularFile(schemaFilePath)
+                && Files.isReadable(schemaFilePath);
         if (schemaFilePathOk)
         {
             rootSchema = mapper.readTree(schemaFilePath.toFile());
-            if(!validateSchemaContent()) {
-                throw new IllegalArgumentException(String.format("the schema file [%s] has no top-level 'properties' — not a valid object schema", schemaFilePath));
+            if (!rootSchema.has("properties") || rootSchema.get("properties").isEmpty())
+            {
+                throw new IllegalArgumentException(String.format(
+                        "the schema file [%s] has no top-level 'properties' — not a valid object schema",
+                        schemaFilePath));
             }
         }
         else
         {
-            throw new IllegalArgumentException(String.format("the schema file [%s] was not found or is not readable", schemaFilePath));
+            throw new IllegalArgumentException(String.format(
+                    "the schema file [%s] was not found or is not readable", schemaFilePath));
         }
     }
 
-    private boolean validateSchemaContent() {
-        return rootSchema.has("properties") && !rootSchema.get("properties").isEmpty();
-    }
-
-    public JsonNode resolveRef(String ref) {
+    public JsonNode resolveRef(String ref)
+    {
         if (!ref.startsWith("#/")) return null;
         String[] parts = ref.substring(2).split("/");
         JsonNode node  = rootSchema;
-        for (String part : parts) {
+        for (String part : parts)
+        {
             part = part.replace("~1", "/").replace("~0", "~");
             node = node.get(part);
             if (node == null) return null;
@@ -51,9 +55,9 @@ public class JsonSchema
         return node;
     }
 
-    public boolean has(String ref)
+    public boolean has(String field)
     {
-        return rootSchema.has(ref);
+        return rootSchema.has(field);
     }
 
     public JsonNode getProperties()
@@ -70,7 +74,8 @@ public class JsonSchema
     {
         List<String> requiredFields = new ArrayList<>();
         JsonNode requiredNode = getRequired();
-        if (requiredNode != null && requiredNode.isArray()) {
+        if (requiredNode != null && requiredNode.isArray())
+        {
             requiredNode.forEach(n -> requiredFields.add(n.asText()));
         }
         return requiredFields;

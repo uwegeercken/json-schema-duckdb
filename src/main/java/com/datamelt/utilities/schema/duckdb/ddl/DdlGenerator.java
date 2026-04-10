@@ -2,8 +2,6 @@ package com.datamelt.utilities.duckdb;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,25 +23,34 @@ import java.util.Set;
  * JSON Schema metadata keywords ($schema, $vocabulary, etc.) are excluded from
  * the generated DDL even if they appear under "properties".
  *
+ * All fallbacks and issues encountered during generation are returned in the
+ * DdlResult rather than logged. Callers should check DdlResult.isClean() or
+ * DdlResult.getErrors() before using the DDL in production.
+ *
  * Programmatic API:
  * <pre>
  *   // From a file path (IF NOT EXISTS by default)
- *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
+ *   DdlResult result = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
  *
  *   // From a file path without IF NOT EXISTS
- *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"), false);
+ *   DdlResult result = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"), false);
  *
  *   // From an InputStream
- *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
+ *   DdlResult result = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
  *
  *   // From a pre-parsed JsonNode
  *   JsonNode schema = new ObjectMapper().readTree(file);
- *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", schema);
+ *   DdlResult result = JsonSchemaDdlGenerator.generateDdl("orders", schema);
+ *
+ *   // Using the result
+ *   if (!result.isClean()) {
+ *       result.getWarnings().forEach(System.out::println);
+ *   }
+ *   String ddl = result.getDdl();
  * </pre>
  */
 public class JsonSchemaDdlGenerator {
 
-    private static final Logger       LOG    = LoggerFactory.getLogger(JsonSchemaDdlGenerator.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
@@ -56,72 +63,25 @@ public class JsonSchemaDdlGenerator {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /**
-     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a JSON Schema file.
-     *
-     * @param tableName  name of the table in the generated DDL
-     * @param schemaPath path to the JSON Schema file
-     * @return the CREATE TABLE statement as a String
-     * @throws IOException              if the file cannot be read
-     * @throws IllegalArgumentException if the schema has no top-level properties
-     */
-    public static String generateDdl(String tableName, Path schemaPath) throws IOException {
+    public static DdlResult generateDdl(String tableName, Path schemaPath) throws IOException {
         return generateDdl(tableName, schemaPath, true);
     }
 
-    /**
-     * Generate a DuckDB CREATE TABLE statement from a JSON Schema file.
-     *
-     * @param tableName    name of the table in the generated DDL
-     * @param schemaPath   path to the JSON Schema file
-     * @param ifNotExists  if true, emits CREATE TABLE IF NOT EXISTS
-     * @return the CREATE TABLE statement as a String
-     * @throws IOException              if the file cannot be read
-     * @throws IllegalArgumentException if the schema has no top-level properties
-     */
-    public static String generateDdl(String tableName, Path schemaPath, boolean ifNotExists) throws IOException {
+    public static DdlResult generateDdl(String tableName, Path schemaPath, boolean ifNotExists) throws IOException {
         JsonNode schema = MAPPER.readTree(Files.readString(schemaPath));
         return generateDdl(tableName, schema, ifNotExists);
     }
 
-    /**
-     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a JSON Schema input stream.
-     *
-     * @param tableName    name of the table in the generated DDL
-     * @param schemaStream input stream of the JSON Schema
-     * @return the CREATE TABLE statement as a String
-     * @throws IOException              if the stream cannot be read
-     * @throws IllegalArgumentException if the schema has no top-level properties
-     */
-    public static String generateDdl(String tableName, InputStream schemaStream) throws IOException {
+    public static DdlResult generateDdl(String tableName, InputStream schemaStream) throws IOException {
         return generateDdl(tableName, schemaStream, true);
     }
 
-    /**
-     * Generate a DuckDB CREATE TABLE statement from a JSON Schema input stream.
-     *
-     * @param tableName    name of the table in the generated DDL
-     * @param schemaStream input stream of the JSON Schema
-     * @param ifNotExists  if true, emits CREATE TABLE IF NOT EXISTS
-     * @return the CREATE TABLE statement as a String
-     * @throws IOException              if the stream cannot be read
-     * @throws IllegalArgumentException if the schema has no top-level properties
-     */
-    public static String generateDdl(String tableName, InputStream schemaStream, boolean ifNotExists) throws IOException {
-        LOG.info("Reading schema from input stream");
+    public static DdlResult generateDdl(String tableName, InputStream schemaStream, boolean ifNotExists) throws IOException {
         JsonNode schema = MAPPER.readTree(schemaStream);
         return generateDdl(tableName, schema, ifNotExists);
     }
 
-    /**
-     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a pre-parsed JSON Schema node.
-     *
-     * @param tableName  name of the table in the generated DDL
-     * @param schema     the root JSON Schema node
-     * @return the CREATE TABLE statement as a String
-     * @throws IllegalArgumentException if the schema has no top-level properties
-     */
-    public static String generateDdl(String tableName, JsonNode schema) {
+    public static DdlResult generateDdl(String tableName, JsonNode schema) {
         return generateDdl(tableName, schema, true);
     }
 
@@ -131,12 +91,10 @@ public class JsonSchemaDdlGenerator {
      * @param tableName   name of the table in the generated DDL
      * @param schema      the root JSON Schema node
      * @param ifNotExists if true, emits CREATE TABLE IF NOT EXISTS
-     * @return the CREATE TABLE statement as a String
+     * @return a DdlResult containing the DDL string and any warnings or errors encountered
      * @throws IllegalArgumentException if the schema has no top-level properties
      */
-    public static String generateDdl(String tableName, JsonNode schema, boolean ifNotExists) {
-        LOG.debug("Generating DDL for table '{}'", tableName);
-
+    public static DdlResult generateDdl(String tableName, JsonNode schema, boolean ifNotExists) {
         JsonNode rootSchema = schema;
         JsonNode resolved   = resolveTopLevel(schema, rootSchema);
 
@@ -152,26 +110,23 @@ public class JsonSchemaDdlGenerator {
         if (requiredNode != null && requiredNode.isArray()) {
             requiredNode.forEach(n -> requiredFields.add(n.asText()));
         }
-        LOG.debug("Required fields: {}", requiredFields);
 
-        List<String> columnDefs = new ArrayList<>();
+        List<DdlWarning> warnings   = new ArrayList<>();
+        List<String>     columnDefs = new ArrayList<>();
+
         properties.fieldNames().forEachRemaining(fieldName -> {
 
             // Skip JSON Schema metadata keywords — they are not data columns
             if (METADATA_FIELDS.contains(fieldName)) {
-                LOG.debug("Skipping metadata field '{}'", fieldName);
                 return;
             }
 
             JsonNode fieldSchema = properties.get(fieldName);
-            String   duckDbType  = JsonSchemaToDuckDbType.toDuckDbType(fieldSchema, rootSchema);
+            String   duckDbType  = JsonSchemaToDuckDbType.toDuckDbType(
+                    fieldSchema, rootSchema, fieldName, warnings);
             String   nullability = requiredFields.contains(fieldName) ? " NOT NULL" : "";
+            String   quotedName  = "\"" + fieldName + "\"";
 
-            // Always quote field names: handles reserved words, @type, $ref, spaces, etc.
-            String quotedName = "\"" + fieldName + "\"";
-
-            LOG.debug("  Column {} -> {} {}", quotedName, duckDbType,
-                    nullability.isBlank() ? "(nullable)" : "(NOT NULL)");
             columnDefs.add("    %s %s%s".formatted(quotedName, duckDbType, nullability));
         });
 
@@ -181,8 +136,7 @@ public class JsonSchemaDdlGenerator {
                 %s
                 );""".formatted(ifNotExistsClause, tableName, String.join(",\n", columnDefs));
 
-        LOG.info("DDL generated for table '{}' with {} column(s)", tableName, columnDefs.size());
-        return ddl;
+        return new DdlResult(ddl, warnings);
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -200,12 +154,8 @@ public class JsonSchemaDdlGenerator {
                 for (String part : parts) {
                     part = part.replace("~1", "/").replace("~0", "~");
                     node = node.get(part);
-                    if (node == null) {
-                        LOG.warn("Could not resolve top-level $ref '{}' — using schema as-is", ref);
-                        return schema;
-                    }
+                    if (node == null) return schema;
                 }
-                LOG.debug("Resolved top-level $ref '{}'", ref);
                 return node;
             }
         }

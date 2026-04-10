@@ -1,6 +1,5 @@
-package com.datamelt.utilities.jsonschema.validate;
+package com.datamelt.utilities.schema.validate;
 
-import com.datamelt.utilities.jsonschema.JsonSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -32,8 +31,6 @@ import java.util.Set;
  */
 public class JsonFileValidator
 {
-    private static final ObjectMapper mapper = new ObjectMapper();
-
     private final JsonSchema rootSchema;
     private final boolean    failOnUnknownFields;
 
@@ -73,6 +70,7 @@ public class JsonFileValidator
 
     public ValidationResult validate(Path path) throws IOException, IllegalArgumentException
     {
+        ObjectMapper mapper = new ObjectMapper();
         if (Files.exists(path) && Files.isRegularFile(path) && Files.isReadable(path))
         {
             JsonNode records;
@@ -90,7 +88,8 @@ public class JsonFileValidator
         }
         else
         {
-            throw new IOException(String.format("the data file [%s] was not found or is not readable", path));
+            throw new IOException(String.format(
+                    "the data file [%s] was not found or is not readable", path));
         }
     }
 
@@ -192,8 +191,8 @@ public class JsonFileValidator
                 // ── Recurse into arrays ───────────────────────────────────
                 if (val.isArray() && resolvedSchema.has("items"))
                 {
-                    JsonNode itemsSchema  = resolvedSchema.get("items");
-                    RefResult itemsResult = resolveRef(itemsSchema);
+                    JsonNode  itemsSchema  = resolvedSchema.get("items");
+                    RefResult itemsResult  = resolveRef(itemsSchema);
                     if (!itemsResult.isResolved())
                     {
                         violations.add(new Violation(recordIndex, path + "." + fieldName, itemsResult.error()));
