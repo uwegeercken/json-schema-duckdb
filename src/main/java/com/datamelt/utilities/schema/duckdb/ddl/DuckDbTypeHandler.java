@@ -1,4 +1,4 @@
-package com.datamelt.utilities.duckdb;
+package com.datamelt.utilities.schema.duckdb.ddl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -23,7 +23,8 @@ import java.util.List;
  *
  * All fallbacks are recorded in the provided warnings list rather than logged.
  */
-public class JsonSchemaToDuckDbType {
+public class SchemaToDuckDbType
+{
 
     // ── Public entry point ────────────────────────────────────────────────────
 
