@@ -1,4 +1,4 @@
-package com.datamelt.utilities.duckdb;
+package com.datamelt.utilities.schema.duckdb.ddl;
 
 /**
  * Represents a warning or error encountered during DDL generation.

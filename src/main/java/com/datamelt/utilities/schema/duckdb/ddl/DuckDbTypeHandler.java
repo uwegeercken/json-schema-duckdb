@@ -23,7 +23,7 @@ import java.util.List;
  *
  * All fallbacks are recorded in the provided warnings list rather than logged.
  */
-public class SchemaToDuckDbType
+public class DuckDbTypeHandler
 {
 
     // ── Public entry point ────────────────────────────────────────────────────

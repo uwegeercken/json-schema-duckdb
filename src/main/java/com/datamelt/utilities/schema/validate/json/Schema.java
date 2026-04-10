@@ -1,4 +1,4 @@
-package com.datamelt.utilities.schema.validate;
+package com.datamelt.utilities.schema.validate.json;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,16 +9,16 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-public class JsonSchema
+public class Schema
 {
     private final JsonNode rootSchema;
 
-    public JsonSchema(String schemaFileName) throws IOException, IllegalArgumentException
+    public Schema(String schemaFileName) throws IOException, IllegalArgumentException
     {
         this(Path.of(schemaFileName).toAbsolutePath().normalize());
     }
 
-    public JsonSchema(Path schemaFilePath) throws IOException, IllegalArgumentException
+    public Schema(Path schemaFilePath) throws IOException, IllegalArgumentException
     {
         ObjectMapper mapper = new ObjectMapper();
         boolean schemaFilePathOk = Files.exists(schemaFilePath)

@@ -1,4 +1,4 @@
-package com.datamelt.utilities.duckdb;
+package com.datamelt.utilities.schema.duckdb.ddl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,7 +49,8 @@ import java.util.Set;
  *   String ddl = result.getDdl();
  * </pre>
  */
-public class JsonSchemaDdlGenerator {
+public class DdlGenerator
+{
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -122,7 +123,7 @@ public class JsonSchemaDdlGenerator {
             }
 
             JsonNode fieldSchema = properties.get(fieldName);
-            String   duckDbType  = JsonSchemaToDuckDbType.toDuckDbType(
+            String   duckDbType  = DuckDbTypeHandler.toDuckDbType(
                     fieldSchema, rootSchema, fieldName, warnings);
             String   nullability = requiredFields.contains(fieldName) ? " NOT NULL" : "";
             String   quotedName  = "\"" + fieldName + "\"";

@@ -1,4 +1,4 @@
-package com.datamelt.utilities.schema.validate;
+package com.datamelt.utilities.schema.validate.json;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,9 +29,9 @@ import java.util.Set;
  * This is a structural validator — it does not evaluate format constraints,
  * pattern, minimum/maximum, or enum values.
  */
-public class JsonFileValidator
+public class FileValidator
 {
-    private final JsonSchema rootSchema;
+    private final Schema rootSchema;
     private final boolean    failOnUnknownFields;
 
     /**
@@ -44,7 +44,7 @@ public class JsonFileValidator
     /**
      * Creates a validator that treats unknown fields as warnings.
      */
-    public JsonFileValidator(JsonSchema schema) throws IOException, IllegalArgumentException
+    public FileValidator(Schema schema) throws IOException, IllegalArgumentException
     {
         this(schema, false);
     }
@@ -56,7 +56,7 @@ public class JsonFileValidator
      * @param failOnUnknownFields  if true, unknown fields produce ERROR violations;
      *                             if false, they produce WARNING violations
      */
-    public JsonFileValidator(JsonSchema schema, boolean failOnUnknownFields) throws IOException, IllegalArgumentException
+    public FileValidator(Schema schema, boolean failOnUnknownFields) throws IOException, IllegalArgumentException
     {
         this.rootSchema          = schema;
         this.failOnUnknownFields = failOnUnknownFields;

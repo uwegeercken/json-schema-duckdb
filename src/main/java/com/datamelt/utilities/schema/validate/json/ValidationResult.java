@@ -1,4 +1,4 @@
-package com.datamelt.utilities.schema.validate;
+package com.datamelt.utilities.schema.validate.json;
 
 import java.util.List;
 

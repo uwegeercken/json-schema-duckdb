@@ -1,6 +1,8 @@
 # JSON Schema to DuckDB
 
-Generates a DuckDB `CREATE TABLE` statement from a JSON Schema and optionally validates JSON data files against the schema.
+Generates a DuckDB `CREATE TABLE` statement from a JSON Schema.
+
+Also offers functionality to validate Json data files against a Json schema.
 
 ## Requirements
 
@@ -15,7 +17,7 @@ Add the following dependency to your `pom.xml`:
 <dependency>
     <groupId>io.github.uwegeercken</groupId>
     <artifactId>json-schema-duckdb</artifactId>
-    <version>1.0.3</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -29,21 +31,29 @@ Specify the name of the table and pass the schema file to generate a duckdb crea
 ### From a file path
 
 ```java
+import com.datamelt.utilities.schema.duckdb.ddl.DdlResult;
+
 // CREATE TABLE IF NOT EXISTS (default)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", Path.of("order.json"));
 
 // CREATE TABLE (without IF NOT EXISTS)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"), false);
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", Path.of("order.json"), false);
+
+// Get the actual DDL
+String ddl = ddlResult.getDdl();
 ```
 
 ### From a classpath resource stream
 
 ```java
 // CREATE TABLE IF NOT EXISTS (default)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
 
 // CREATE TABLE (without IF NOT EXISTS)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"), false);
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"), false);
+
+// Get the actual DDL
+String ddl = ddlResult.getDdl();
 ```
 
 ### From a pre-parsed JsonNode
@@ -52,11 +62,35 @@ String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResource
 JsonNode schema = new ObjectMapper().readTree(Path.of("order.json").toFile());
 
 // CREATE TABLE IF NOT EXISTS (default)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", schema);
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", schema);
 
 // CREATE TABLE (without IF NOT EXISTS)
-String ddl = JsonSchemaDdlGenerator.generateDdl("orders", schema, false);
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", schema, false);
+
+// Get the actual DDL
+String ddl = ddlResult.getDdl();
 ```
+
+### Working with warnings and errors
+
+```java
+DdlResult ddlResult = DdlGenerator.generateDdl("orders", schema);
+
+// All errors
+ddlResult.getErrors().forEach(System.out::println);
+
+// All warnings
+ddlResult.getWarnings().forEach(System.out::println);
+
+```
+
+Each `DdlWarning` contains:
+
+| Method              | Description                                                   |
+|---------------------|---------------------------------------------------------------|
+| `getField()`        | Dotted path to the field, e.g. `(root).person.address.city`   |
+| `getMessage()`      | Human-readable description of the problem                     |
+| `getSeverity()`     | `ERROR` or `WARNING`                                          |
 
 ---
 
@@ -75,8 +109,8 @@ This is a structural validator — it does not evaluate `format`, `pattern`, `mi
 ### Basic usage
 
 ```java
-JsonSchema schema = new JsonSchema("order.json");
-JsonFileValidator validator = new JsonFileValidator(schema);
+Schema schema = new Schema("order.json");
+FileValidator validator = new FileValidator(schema);
 
 // Validate a single file
 ValidationResult result = validator.validate(Path.of("data.json"));
@@ -102,8 +136,8 @@ By default, unknown fields (fields present in the data but not declared in the s
 a `WARNING` violation and do not affect `isValid()`. Pass `true` to treat them as errors instead:
 
 ```java
-JsonSchema schema = new JsonSchema("order.json");
-JsonFileValidator validator = new JsonFileValidator(schema, true);
+Schema schema = new Schema("order.json");
+FileValidator validator = new FileValidator(schema, true);
 
 ValidationResult result = validator.validate(Path.of("data.json"));
 System.out.println("Valid: " + result.isValid()); // false if any unknown fields found
@@ -138,7 +172,7 @@ Each `Violation` contains:
 | `getSeverity()`     | `ERROR` or `WARNING`                     |
 
 
-## Type Mapping
+## DuckDb Type Mapping
 
 | JSON Schema type             | Format / notes                  | DuckDB type               |
 |------------------------------|---------------------------------|---------------------------|
