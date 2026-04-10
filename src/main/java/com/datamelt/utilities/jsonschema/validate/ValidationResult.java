@@ -1,17 +1,16 @@
-package com.datamelt.utilities.duckdb.jsonschema;
-
+package com.datamelt.utilities.jsonschema.validate;
 
 import java.util.List;
 
 public class ValidationResult
 {
-    private final long totalRecords;
+    private final long          totalRecords;
     private final List<Violation> violations;
 
     public ValidationResult(long totalRecords, List<Violation> violations)
     {
         this.totalRecords = totalRecords;
-        this.violations = violations;
+        this.violations   = violations;
     }
 
     public long getTotalRecords()
@@ -24,8 +23,23 @@ public class ValidationResult
         return violations;
     }
 
+    public List<Violation> getErrors()
+    {
+        return violations.stream()
+                .filter(v -> v.getSeverity() == Violation.Severity.ERROR)
+                .toList();
+    }
+
+    public List<Violation> getWarnings()
+    {
+        return violations.stream()
+                .filter(v -> v.getSeverity() == Violation.Severity.WARNING)
+                .toList();
+    }
+
     public boolean isValid()
     {
-        return violations.isEmpty();
+        return violations.stream()
+                .noneMatch(v -> v.getSeverity() == Violation.Severity.ERROR);
     }
 }

@@ -1,4 +1,4 @@
-package com.datamelt.utilities.duckdb.jsonschema;
+package com.datamelt.utilities.duckdb;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
@@ -12,13 +12,16 @@ import java.util.List;
  *
  * Supported features:
  *   - Primitives: string, integer, number, boolean (with format modifiers)
+ *   - integer formats: int8 -> TINYINT, int16 -> SMALLINT, int32 -> INTEGER, int64/default -> BIGINT
+ *   - number formats:  float -> FLOAT, decimal/default -> DOUBLE
  *   - Objects with properties           -> STRUCT(field TYPE, ...)
  *   - Objects with additionalProperties -> MAP(VARCHAR, valueType)
  *   - Arrays                            -> elementType[]
  *   - Nested arrays                     -> elementType[][] (recursive)
+ *   - Tuple-style arrays                -> VARCHAR[] (fallback with warning)
  *   - $ref resolution                   -> resolved from root $defs / definitions
  *   - anyOf / oneOf                     -> common-type merge or VARCHAR fallback
- *   - allOf                             -> merged STRUCT of all sub-schemas
+ *   - allOf                             -> primitive passthrough or merged STRUCT
  */
 public class JsonSchemaToDuckDbType {
 
@@ -59,8 +62,8 @@ public class JsonSchemaToDuckDbType {
 
         return switch (type) {
             case "string"  -> mapStringType(format);
-            case "integer" -> "BIGINT";
-            case "number"  -> "DOUBLE";
+            case "integer" -> mapIntegerType(format);
+            case "number"  -> mapNumberType(format);
             case "boolean" -> "BOOLEAN";
             case "object"  -> mapObjectType(schema, rootSchema);
             case "array"   -> mapArrayType(schema, rootSchema);
@@ -101,28 +104,52 @@ public class JsonSchemaToDuckDbType {
         return node;
     }
 
-    // ── allOf → merged STRUCT ─────────────────────────────────────────────────
+    // ── allOf → primitive passthrough or merged STRUCT ────────────────────────
 
     private static String mergeAllOf(JsonNode allOf, JsonNode rootSchema) {
-        List<String> fields = new ArrayList<>();
+        List<String> fields         = new ArrayList<>();
+        List<String> primitiveTypes = new ArrayList<>();
+        boolean      hasProperties  = false;
+
         for (JsonNode subSchema : allOf) {
             JsonNode resolved = subSchema.has("$ref")
                     ? resolveRefNode(subSchema.get("$ref").asText(), rootSchema)
                     : subSchema;
             if (resolved == null) continue;
-            JsonNode props = resolved.get("properties");
-            if (props != null) {
-                props.fieldNames().forEachRemaining(name -> {
+
+            if (resolved.has("properties")) {
+                hasProperties = true;
+                resolved.get("properties").fieldNames().forEachRemaining(name -> {
                     String quotedName = "\"" + name + "\"";
-                    fields.add(quotedName + " " + toDuckDbType(props.get(name), rootSchema));
+                    fields.add(quotedName + " " + toDuckDbType(resolved.get("properties").get(name), rootSchema));
                 });
             }
+
+            if (resolved.has("type")) {
+                String type = resolved.get("type").asText();
+                if (!type.equals("object") && !type.equals("array")) {
+                    primitiveTypes.add(toDuckDbType(resolved, rootSchema));
+                }
+            }
         }
-        if (fields.isEmpty()) {
-            LOG.warn("allOf produced no fields — falling back to VARCHAR");
-            return "VARCHAR";
+
+        // If there are properties, build a STRUCT
+        if (hasProperties) {
+            if (fields.isEmpty()) {
+                LOG.warn("allOf produced no fields — falling back to VARCHAR");
+                return "VARCHAR";
+            }
+            return "STRUCT(" + String.join(", ", fields) + ")";
         }
-        return "STRUCT(" + String.join(", ", fields) + ")";
+
+        // If all sub-schemas agree on a single primitive type, return it directly
+        List<String> distinctTypes = primitiveTypes.stream().distinct().toList();
+        if (distinctTypes.size() == 1) {
+            return distinctTypes.get(0);
+        }
+
+        LOG.warn("allOf produced no fields and no common primitive type — falling back to VARCHAR");
+        return "VARCHAR";
     }
 
     // ── anyOf / oneOf → common type or VARCHAR ────────────────────────────────
@@ -167,7 +194,7 @@ public class JsonSchemaToDuckDbType {
         }
 
         if (hasProps) {
-            return buildStruct(properties, rootSchema);
+            return buildStruct(schema, rootSchema);
         }
 
         if (hasAdditional) {
@@ -179,13 +206,20 @@ public class JsonSchemaToDuckDbType {
         return "VARCHAR";
     }
 
-    private static String buildStruct(JsonNode properties, JsonNode rootSchema) {
+    private static String buildStruct(JsonNode objectSchema, JsonNode rootSchema) {
+        JsonNode    properties = objectSchema.get("properties");
+        List<String> required  = new ArrayList<>();
+        JsonNode requiredNode  = objectSchema.get("required");
+        if (requiredNode != null && requiredNode.isArray()) {
+            requiredNode.forEach(n -> required.add(n.asText()));
+        }
+
         List<String> fields = new ArrayList<>();
         properties.fieldNames().forEachRemaining(name -> {
-            // Quote field names for the same reasons as top-level columns:
-            // reserved words, special characters (@type, $ref, spaces, etc.)
-            String quotedName = "\"" + name + "\"";
-            fields.add(quotedName + " " + toDuckDbType(properties.get(name), rootSchema));
+            String quotedName  = "\"" + name + "\"";
+            String type        = toDuckDbType(properties.get(name), rootSchema);
+            String nullability = required.contains(name) ? " NOT NULL" : "";
+            fields.add(quotedName + " " + type + nullability);
         });
         return "STRUCT(" + String.join(", ", fields) + ")";
     }
@@ -198,10 +232,14 @@ public class JsonSchemaToDuckDbType {
             LOG.warn("Array has no 'items' definition — falling back to VARCHAR[]");
             return "VARCHAR[]";
         }
+        if (items.isArray()) {
+            LOG.warn("Tuple-style array 'items' is not supported — falling back to VARCHAR[]");
+            return "VARCHAR[]";
+        }
         return toDuckDbType(items, rootSchema) + "[]";
     }
 
-    // ── string format mapping ─────────────────────────────────────────────────
+    // ── type format mappings ──────────────────────────────────────────────────
 
     private static String mapStringType(String format) {
         return switch (format) {
@@ -210,6 +248,22 @@ public class JsonSchemaToDuckDbType {
             case "time"      -> "TIME";
             case "uuid"      -> "UUID";
             default          -> "VARCHAR";
+        };
+    }
+
+    private static String mapIntegerType(String format) {
+        return switch (format) {
+            case "int8"  -> "TINYINT";
+            case "int16" -> "SMALLINT";
+            case "int32" -> "INTEGER";
+            default      -> "BIGINT";  // int64 and unspecified default to BIGINT
+        };
+    }
+
+    private static String mapNumberType(String format) {
+        return switch (format) {
+            case "float"   -> "FLOAT";
+            default        -> "DOUBLE";  // decimal and unspecified default to DOUBLE
         };
     }
 }
