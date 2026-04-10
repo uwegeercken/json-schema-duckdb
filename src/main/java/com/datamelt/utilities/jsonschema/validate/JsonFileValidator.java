@@ -1,11 +1,20 @@
-package com.datamelt.utilities.duckdb.jsonschema;
+package com.datamelt.utilities.jsonschema.validate;
 
+import com.datamelt.utilities.FileUtility;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+
+import static com.datamelt.utilities.FileUtility.isValidDirectory;
+import static com.datamelt.utilities.FileUtility.isValidFile;
 
 /**
  * Validates JSON data records against a JSON Schema.
@@ -22,33 +31,87 @@ public class JsonSchemaValidator {
 
     private static final Logger LOG = LoggerFactory.getLogger(JsonSchemaValidator.class);
 
-    public record ValidationResult(int totalRecords, List<Violation> violations) {
-        public boolean isValid() { return violations.isEmpty(); }
+    private final JsonNode rootSchema;
+    private final ObjectMapper mapper = new ObjectMapper();
 
-        public void print() {
-            System.out.printf("  Total records : %d%n", totalRecords);
-            System.out.printf("  Violations    : %d%n", violations.size());
-            if (!violations.isEmpty()) {
-                violations.forEach(v -> System.out.println("  " + v));
+    public JsonSchemaValidator(String schemaFileName) throws IOException, IllegalArgumentException
+    {
+        this(Path.of(schemaFileName).toAbsolutePath().normalize());
+    }
+
+    public JsonSchemaValidator(Path schemaFilePath) throws IOException, IllegalArgumentException
+    {
+        boolean schemaFilePathOk = isValidFile(schemaFilePath);
+        if (schemaFilePathOk)
+        {
+            rootSchema = mapper.readTree(schemaFilePath.toFile());
+            if(!validateSchemaContent()) {
+                throw new IllegalArgumentException(String.format("the schema file [%s] has no top-level 'properties' — not a valid object schema", schemaFilePath));
             }
         }
-    }
-
-    public record Violation(int recordIndex, String field, String message) {
-        @Override
-        public String toString() {
-            return "[record #%d] field '%s': %s".formatted(recordIndex + 1, field, message);
+        else
+        {
+            throw new IllegalArgumentException(String.format("the schema file [%s] was not found or is not readable", schemaFilePath));
         }
     }
+
+    public List<ValidationResult> validate(String dataFileName) throws IOException, IllegalArgumentException
+    {
+        Path dataFilePath = Path.of(dataFileName).toAbsolutePath().normalize();
+        return validate(dataFilePath);
+    }
+
+    public List<ValidationResult> validate(Path dataFilePath) throws IOException, IllegalArgumentException
+    {
+        ObjectMapper mapper = new ObjectMapper();
+
+        List<ValidationResult> results = new ArrayList<>();
+        for(Path path : getFiles(dataFilePath))
+        {
+            JsonNode records = null;
+            JsonNode dataFileNode = mapper.readTree(dataFilePath.toFile());
+            if (!dataFileNode.isArray() && dataFileNode.isObject())
+            {
+                ArrayNode arr = mapper.createArrayNode();
+                records = arr.add(dataFileNode);
+            }
+            else
+            {
+                records = dataFileNode;
+            }
+            results.add(validate(records));
+        }
+        return results;
+    }
+
+    private List<Path> getFiles(Path dataFilePath) throws IOException
+    {
+        if (isValidFile(dataFilePath))
+        {
+            return List.of(dataFilePath);
+        }
+        else if(isValidDirectory(dataFilePath))
+        {
+            return FileUtility.getFilesFromDirectory(dataFilePath);
+        }
+        else
+        {
+            return List.of();
+        }
+    }
+
+    private boolean validateSchemaContent() {
+        return rootSchema.has("properties") || rootSchema.get("properties").isEmpty();
+    }
+
 
     /**
      * Validate all records in a JSON array against the given schema.
      *
      * @param records    top-level JSON array of records
-     * @param rootSchema the JSON Schema document
      * @return a ValidationResult containing all violations found
      */
-    public static ValidationResult validate(JsonNode records, JsonNode rootSchema) {
+    public ValidationResult validate(JsonNode records) {
         List<Violation> violations  = new ArrayList<>();
         JsonNode        properties  = rootSchema.get("properties");
 
@@ -111,7 +174,7 @@ public class JsonSchemaValidator {
 
     // ── Type checking ─────────────────────────────────────────────────────────
 
-    private static String checkType(JsonNode val, JsonNode schema, JsonNode rootSchema) {
+    private String checkType(JsonNode val, JsonNode schema, JsonNode rootSchema) {
         if (schema == null || schema.isNull()) return null;
 
         if (schema.has("$ref")) {
@@ -155,12 +218,12 @@ public class JsonSchemaValidator {
         };
     }
 
-    private static String typeMismatch(String expected, JsonNode actual) {
+    private String typeMismatch(String expected, JsonNode actual) {
         return "expected type '%s' but got '%s'".formatted(
                 expected, actual.getNodeType().name().toLowerCase());
     }
 
-    private static JsonNode resolveRef(String ref, JsonNode rootSchema) {
+    private JsonNode resolveRef(String ref, JsonNode rootSchema) {
         if (!ref.startsWith("#/")) return null;
         String[] parts = ref.substring(2).split("/");
         JsonNode node  = rootSchema;
