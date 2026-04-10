@@ -207,19 +207,13 @@ public class JsonSchemaToDuckDbType {
     }
 
     private static String buildStruct(JsonNode objectSchema, JsonNode rootSchema) {
-        JsonNode    properties = objectSchema.get("properties");
-        List<String> required  = new ArrayList<>();
-        JsonNode requiredNode  = objectSchema.get("required");
-        if (requiredNode != null && requiredNode.isArray()) {
-            requiredNode.forEach(n -> required.add(n.asText()));
-        }
+        JsonNode     properties = objectSchema.get("properties");
+        List<String> fields     = new ArrayList<>();
 
-        List<String> fields = new ArrayList<>();
         properties.fieldNames().forEachRemaining(name -> {
-            String quotedName  = "\"" + name + "\"";
-            String type        = toDuckDbType(properties.get(name), rootSchema);
-            String nullability = required.contains(name) ? " NOT NULL" : "";
-            fields.add(quotedName + " " + type + nullability);
+            String quotedName = "\"" + name + "\"";
+            String type       = toDuckDbType(properties.get(name), rootSchema);
+            fields.add(quotedName + " " + type);  // no NOT NULL inside STRUCT
         });
         return "STRUCT(" + String.join(", ", fields) + ")";
     }
