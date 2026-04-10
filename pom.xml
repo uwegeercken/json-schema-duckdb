@@ -6,7 +6,7 @@
 
     <groupId>io.github.uwegeercken</groupId>
     <artifactId>json-schema-duckdb</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <packaging>jar</packaging>
 
     <name>json-schema-duckdb</name>
@@ -155,7 +155,7 @@
                             </descriptorRefs>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.datamelt.utilities.duckdb.jsonschema.Main</mainClass>
+                                    <mainClass>com.datamelt.utilities.jsonschema.Main</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>

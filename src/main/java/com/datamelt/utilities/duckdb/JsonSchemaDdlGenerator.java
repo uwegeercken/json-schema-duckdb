@@ -1,4 +1,4 @@
-package com.datamelt.utilities.duckdb.jsonschema;
+package com.datamelt.utilities.duckdb;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,8 +27,11 @@ import java.util.Set;
  *
  * Programmatic API:
  * <pre>
- *   // From a file path
+ *   // From a file path (IF NOT EXISTS by default)
  *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"));
+ *
+ *   // From a file path without IF NOT EXISTS
+ *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", Path.of("order.json"), false);
  *
  *   // From an InputStream
  *   String ddl = JsonSchemaDdlGenerator.generateDdl("orders", getClass().getResourceAsStream("/order.json"));
@@ -54,7 +57,7 @@ public class JsonSchemaDdlGenerator {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Generate a DuckDB CREATE TABLE statement from a JSON Schema file.
+     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a JSON Schema file.
      *
      * @param tableName  name of the table in the generated DDL
      * @param schemaPath path to the JSON Schema file
@@ -63,13 +66,26 @@ public class JsonSchemaDdlGenerator {
      * @throws IllegalArgumentException if the schema has no top-level properties
      */
     public static String generateDdl(String tableName, Path schemaPath) throws IOException {
-        LOG.info("Reading schema from file: {}", schemaPath);
-        JsonNode schema = MAPPER.readTree(Files.readString(schemaPath));
-        return generateDdl(tableName, schema);
+        return generateDdl(tableName, schemaPath, true);
     }
 
     /**
-     * Generate a DuckDB CREATE TABLE statement from a JSON Schema input stream.
+     * Generate a DuckDB CREATE TABLE statement from a JSON Schema file.
+     *
+     * @param tableName    name of the table in the generated DDL
+     * @param schemaPath   path to the JSON Schema file
+     * @param ifNotExists  if true, emits CREATE TABLE IF NOT EXISTS
+     * @return the CREATE TABLE statement as a String
+     * @throws IOException              if the file cannot be read
+     * @throws IllegalArgumentException if the schema has no top-level properties
+     */
+    public static String generateDdl(String tableName, Path schemaPath, boolean ifNotExists) throws IOException {
+        JsonNode schema = MAPPER.readTree(Files.readString(schemaPath));
+        return generateDdl(tableName, schema, ifNotExists);
+    }
+
+    /**
+     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a JSON Schema input stream.
      *
      * @param tableName    name of the table in the generated DDL
      * @param schemaStream input stream of the JSON Schema
@@ -78,13 +94,27 @@ public class JsonSchemaDdlGenerator {
      * @throws IllegalArgumentException if the schema has no top-level properties
      */
     public static String generateDdl(String tableName, InputStream schemaStream) throws IOException {
-        LOG.info("Reading schema from input stream");
-        JsonNode schema = MAPPER.readTree(schemaStream);
-        return generateDdl(tableName, schema);
+        return generateDdl(tableName, schemaStream, true);
     }
 
     /**
-     * Generate a DuckDB CREATE TABLE statement from a pre-parsed JSON Schema node.
+     * Generate a DuckDB CREATE TABLE statement from a JSON Schema input stream.
+     *
+     * @param tableName    name of the table in the generated DDL
+     * @param schemaStream input stream of the JSON Schema
+     * @param ifNotExists  if true, emits CREATE TABLE IF NOT EXISTS
+     * @return the CREATE TABLE statement as a String
+     * @throws IOException              if the stream cannot be read
+     * @throws IllegalArgumentException if the schema has no top-level properties
+     */
+    public static String generateDdl(String tableName, InputStream schemaStream, boolean ifNotExists) throws IOException {
+        LOG.info("Reading schema from input stream");
+        JsonNode schema = MAPPER.readTree(schemaStream);
+        return generateDdl(tableName, schema, ifNotExists);
+    }
+
+    /**
+     * Generate a DuckDB CREATE TABLE IF NOT EXISTS statement from a pre-parsed JSON Schema node.
      *
      * @param tableName  name of the table in the generated DDL
      * @param schema     the root JSON Schema node
@@ -92,6 +122,19 @@ public class JsonSchemaDdlGenerator {
      * @throws IllegalArgumentException if the schema has no top-level properties
      */
     public static String generateDdl(String tableName, JsonNode schema) {
+        return generateDdl(tableName, schema, true);
+    }
+
+    /**
+     * Generate a DuckDB CREATE TABLE statement from a pre-parsed JSON Schema node.
+     *
+     * @param tableName   name of the table in the generated DDL
+     * @param schema      the root JSON Schema node
+     * @param ifNotExists if true, emits CREATE TABLE IF NOT EXISTS
+     * @return the CREATE TABLE statement as a String
+     * @throws IllegalArgumentException if the schema has no top-level properties
+     */
+    public static String generateDdl(String tableName, JsonNode schema, boolean ifNotExists) {
         LOG.debug("Generating DDL for table '{}'", tableName);
 
         JsonNode rootSchema = schema;
@@ -132,10 +175,11 @@ public class JsonSchemaDdlGenerator {
             columnDefs.add("    %s %s%s".formatted(quotedName, duckDbType, nullability));
         });
 
+        String ifNotExistsClause = ifNotExists ? "IF NOT EXISTS " : "";
         String ddl = """
-                CREATE TABLE IF NOT EXISTS %s (
+                CREATE TABLE %s%s (
                 %s
-                );""".formatted(tableName, String.join(",\n", columnDefs));
+                );""".formatted(ifNotExistsClause, tableName, String.join(",\n", columnDefs));
 
         LOG.info("DDL generated for table '{}' with {} column(s)", tableName, columnDefs.size());
         return ddl;

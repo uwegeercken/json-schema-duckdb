@@ -6,7 +6,7 @@
         </Console>
     </Appenders>
     <Loggers>
-        <Logger name="com.datamelt.utilities.duckdb.jsonschema" level="info" additivity="false">
+        <Logger name="com.datamelt.utilities.jsonschema" level="info" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
         <Root level="warn">
